@@ -18,7 +18,126 @@ from ..utils.shape_convert import *
 
 from ..utils.Bra.BRA import *
 
+@MODELS.register_module()
+class TBiSeg(BaseModule):
+    # The backbone of TBiSeg.
 
+    def __init__(self,
+                 in_channels=3,
+                 embed_dims=[96,192,384,768],
+                 num_stages=4,
+                 num_layers=[2, 2, 6, 2],
+                 num_heads=[1, 2, 4, 8],
+                 patch_sizes=[7, 3, 3, 3],
+                 strides=[4, 2, 2, 2],
+                 sr_ratios=[8, 4, 2, 1],
+                 out_indices=(0, 1, 2, 3),
+                 mlp_ratio=4,
+                 qkv_bias=True,
+                 drop_rate=0.,
+                 attn_drop_rate=0.,
+                 drop_path_rate=0.,
+                 act_cfg=dict(type='GELU'),
+                 norm_cfg=dict(type='LN', eps=1e-6),
+                 pretrained=None,
+                 init_cfg=None,
+                 with_cp=False,
+                 head_dim=32,
+                 n_wins:Union[int, Tuple[int]]=(7, 7, 7, 7),
+                 topks:Union[int, Tuple[int]]=(1, 4, 16, -1),
+                 side_dwconv:int=5,):
+        super().__init__(init_cfg=init_cfg)
+
+        assert not (init_cfg and pretrained), \
+            'init_cfg and pretrained cannot be set at the same time'
+        if isinstance(pretrained, str):
+            warnings.warn('DeprecationWarning: pretrained is deprecated, '
+                          'please use "init_cfg" instead')
+            self.init_cfg = dict(type='Pretrained', checkpoint=pretrained)
+        elif pretrained is not None:
+            raise TypeError('pretrained must be a str or None')
+
+        self.embed_dims = embed_dims
+        self.num_stages = num_stages
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.patch_sizes = patch_sizes
+        self.strides = strides
+        self.mlp_ratio = mlp_ratio
+        self.sr_ratios = sr_ratios
+        self.with_cp = with_cp
+        assert num_stages == len(num_layers) == len(num_heads) \
+               == len(patch_sizes) == len(strides) == len(sr_ratios)
+
+        self.out_indices = out_indices
+        assert max(out_indices) < self.num_stages
+
+        self.downsample_layers = nn.ModuleList()
+        # patch embedding: conv-norm
+        stem = nn.Sequential(nn.Conv2d(in_channels, embed_dims[0], kernel_size=(4, 4), stride=(4, 4)),
+                             nn.BatchNorm2d(embed_dims[0])
+                            )
+        self.downsample_layers.append(stem)
+        self.norm = nn.ModuleList()
+        for i in range(4):
+            norm = nn.BatchNorm2d(embed_dims[i])
+            self.norm.append(norm)
+       
+        for i in range(3):
+            # patch merging: norm-conv
+            downsample_layer = nn.Sequential(
+                        nn.BatchNorm2d(embed_dims[i]), 
+                        nn.Conv2d(embed_dims[i], embed_dims[i+1], kernel_size=(2, 2), stride=(2, 2)),
+                    )
+            self.downsample_layers.append(downsample_layer)
+
+        ##########################################################################
+        self.stages = nn.ModuleList() # 4 feature resolution stages, each consisting of multiple residual blocks
+        nheads= [dim // head_dim for dim in embed_dims]
+        # transformer encoder
+        dpr = [
+            x.item()
+            for x in torch.linspace(0, drop_path_rate, sum(num_layers))
+        ]  # stochastic num_layer decay rule
+
+        for i in range(4):
+            stage = BasicLayer(dim=embed_dims[i],
+                               depth=num_layers[i],
+                               num_heads=nheads[i], 
+                               mlp_ratio=self.mlp_ratio,
+                               drop_path=dpr[sum(num_layers[:i]):sum(num_layers[:i+1])],
+
+                               n_win=n_wins[i], topk=topks[i], side_dwconv=side_dwconv
+
+                               )
+            self.stages.append(stage)
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward_features(self, x:torch.Tensor):
+
+        outs = []
+
+        for i in range(4):
+            x = self.downsample_layers[i](x)
+            x = self.stages[i](x)
+            if i in self.out_indices:
+                outs.append(self.norm[i](x))
+        return outs
+
+    def forward(self, x:torch.Tensor):
+        outs = self.forward_features(x)
+
+        return outs
 
 class MixFFN(BaseModule):
 
@@ -233,123 +352,3 @@ class TransformerEncoderLayer(BaseModule):
         return x
 
 
-@MODELS.register_module()
-class TBiSeg(BaseModule):
-    # The backbone of TBiSeg.
-
-    def __init__(self,
-                 in_channels=3,
-                 embed_dims=[96,192,384,768],
-                 num_stages=4,
-                 num_layers=[2, 2, 6, 2],
-                 num_heads=[1, 2, 4, 8],
-                 patch_sizes=[7, 3, 3, 3],
-                 strides=[4, 2, 2, 2],
-                 sr_ratios=[8, 4, 2, 1],
-                 out_indices=(0, 1, 2, 3),
-                 mlp_ratio=4,
-                 qkv_bias=True,
-                 drop_rate=0.,
-                 attn_drop_rate=0.,
-                 drop_path_rate=0.,
-                 act_cfg=dict(type='GELU'),
-                 norm_cfg=dict(type='LN', eps=1e-6),
-                 pretrained=None,
-                 init_cfg=None,
-                 with_cp=False,
-                 head_dim=32,
-                 n_wins:Union[int, Tuple[int]]=(7, 7, 7, 7),
-                 topks:Union[int, Tuple[int]]=(1, 4, 16, -1),
-                 side_dwconv:int=5,):
-        super().__init__(init_cfg=init_cfg)
-
-        assert not (init_cfg and pretrained), \
-            'init_cfg and pretrained cannot be set at the same time'
-        if isinstance(pretrained, str):
-            warnings.warn('DeprecationWarning: pretrained is deprecated, '
-                          'please use "init_cfg" instead')
-            self.init_cfg = dict(type='Pretrained', checkpoint=pretrained)
-        elif pretrained is not None:
-            raise TypeError('pretrained must be a str or None')
-
-        self.embed_dims = embed_dims
-        self.num_stages = num_stages
-        self.num_layers = num_layers
-        self.num_heads = num_heads
-        self.patch_sizes = patch_sizes
-        self.strides = strides
-        self.mlp_ratio = mlp_ratio
-        self.sr_ratios = sr_ratios
-        self.with_cp = with_cp
-        assert num_stages == len(num_layers) == len(num_heads) \
-               == len(patch_sizes) == len(strides) == len(sr_ratios)
-
-        self.out_indices = out_indices
-        assert max(out_indices) < self.num_stages
-
-        self.downsample_layers = nn.ModuleList()
-        # patch embedding: conv-norm
-        stem = nn.Sequential(nn.Conv2d(in_channels, embed_dims[0], kernel_size=(4, 4), stride=(4, 4)),
-                             nn.BatchNorm2d(embed_dims[0])
-                            )
-        self.downsample_layers.append(stem)
-        self.norm = nn.ModuleList()
-        for i in range(4):
-            norm = nn.BatchNorm2d(embed_dims[i])
-            self.norm.append(norm)
-       
-        for i in range(3):
-            # patch merging: norm-conv
-            downsample_layer = nn.Sequential(
-                        nn.BatchNorm2d(embed_dims[i]), 
-                        nn.Conv2d(embed_dims[i], embed_dims[i+1], kernel_size=(2, 2), stride=(2, 2)),
-                    )
-            self.downsample_layers.append(downsample_layer)
-
-        ##########################################################################
-        self.stages = nn.ModuleList() # 4 feature resolution stages, each consisting of multiple residual blocks
-        nheads= [dim // head_dim for dim in embed_dims]
-        # transformer encoder
-        dpr = [
-            x.item()
-            for x in torch.linspace(0, drop_path_rate, sum(num_layers))
-        ]  # stochastic num_layer decay rule
-
-        for i in range(4):
-            stage = BasicLayer(dim=embed_dims[i],
-                               depth=num_layers[i],
-                               num_heads=nheads[i], 
-                               mlp_ratio=self.mlp_ratio,
-                               drop_path=dpr[sum(num_layers[:i]):sum(num_layers[:i+1])],
-
-                               n_win=n_wins[i], topk=topks[i], side_dwconv=side_dwconv
-
-                               )
-            self.stages.append(stage)
-        
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-
-    def forward_features(self, x:torch.Tensor):
-
-        outs = []
-
-        for i in range(4):
-            x = self.downsample_layers[i](x)
-            x = self.stages[i](x)
-            if i in self.out_indices:
-                outs.append(self.norm[i](x))
-        return outs
-
-    def forward(self, x:torch.Tensor):
-        outs = self.forward_features(x)
-
-        return outs

@@ -8,7 +8,7 @@ Implementation for TBiSeg
 
 - Unmanned surface vehicles (USVs) for inland waterways have recently attracted increasing attention in various fields. Accurate detection in navigable regions is crucial for ensuring USV safety in autonomous navigation. However, the complex and variable environment of inland waterways, such as confusable textures and irregular edge details, continues to pose some problems in existing methods. Therefore, to acquire navigable regions, this study proposed TBiSeg, a Vision Transformer-based efficient inland waterway segmentation network, for obtaining pixel-level results. Bi-level routing attention is used to improve the Transformer block, which enhances the understanding of inland water textures. Additionly, this study combined global and local attention through a hierarchical encoder–decoder architecture. To simulate inland waterway scenes as accurately as possible, this study used two representative public datasets for data integration and data augmentation, and conducted testing and cross-validating using multiple inland waterway datasets. Results demonstrated that the model performed better than current state-of-the-art models in segmentation accuracy and robustness in complex inland waterway environments while showing impressive generalization.
   
-- The code has been released. It is based on mmsegmentation. 
+- The code has been released. It is based on mmsegmentation. Core code is in mmseg/model/backbones/TBiSeg.py
   
 ## Implementation
 
