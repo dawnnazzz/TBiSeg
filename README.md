@@ -21,7 +21,7 @@ Please read the official documentation in detail before you run the code.
 
 The dataset used in this project is available at:
 
-- [USVInland-Water-Segmentation](https://www.orca-tech.cn/datasets)
+- [USVInland-Water-Segmentation](https://orca-tech.cn/datasets/USVInland/Waterline)
 - [Tampere-WaterSeg](https://etsin.fairdata.fi/dataset/e0c6ef65-6e1e-4739-abe3-0455697df5ab)
 - [Dasha River](https://ieee-dataport.org/documents/dasha-river-dataset)
   
